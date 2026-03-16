@@ -97,17 +97,16 @@ color: rgba(192,192,255,.7);
 /* ── BOTTOM PANEL ── */
 .panel {
 position: fixed; top: 0; left: 0; right: 0;
-background: var(–panel-bg);
-border-bottom: 1px solid var(–panel-border);
-transform: translateZ(0);
--webkit-transform: translateZ(0);
-will-change: transform;
+background: #08081c;
+border-bottom: 1px solid rgba(80,80,160,.3);
 z-index: 30;
-padding: 10px 14px 12px;
-display: flex; flex-direction: column; gap: 8px;
-transition: transform .3s cubic-bezier(.4,0,.2,1);
+padding: 6px 14px 8px;
+display: flex; flex-direction: column; gap: 6px;
+overflow: hidden;
+max-height: 36px;
+transition: max-height .3s ease;
 }
-.panel.collapsed { transform: translateZ(0) translateY(calc(-100% + 36px)); }
+.panel.open { max-height: 320px; }
 
 .panel-handle {
 width: 36px; height: 3px; border-radius: 2px;
@@ -117,9 +116,10 @@ cursor: pointer;
 }
 /* Panel header row with logo + freq */
 .panel-header {
-display: flex; align-items: center; justify-content: space-between;
-padding: 0 2px;
+display: flex; align-items: center;
+padding: 2px 2px;
 cursor: pointer;
+min-height: 24px;
 }
 .panel-logo {
 font-size: 13px; letter-spacing: .35em;
@@ -129,7 +129,7 @@ text-shadow: 0 0 12px var(–glow);
 
 /* Panel rows */
 .prow {
-display: flex; align-items: center; gap: 8px;
+display: flex; align-items: center; gap: 6px;
 flex-wrap: wrap;
 }
 .prow-label {
@@ -246,9 +246,11 @@ line-height: 1;
 <div class="panel collapsed" id="panel">
   <div class="panel-header" id="panelHandle">
     <div class="panel-logo">ÆTHER</div>
-    <div class="freq-display" id="freqDisplay">-- Hz</div>
+    <div style="display:flex;align-items:center;gap:12px;margin-left:auto">
+      <div class="freq-display" id="freqDisplay">-- Hz</div>
+      <div style="font-size:9px;letter-spacing:.1em;color:rgba(80,80,160,.6)">▼ TAP</div>
+    </div>
   </div>
-  <div class="panel-handle"></div>
 
   <!-- Wave + Mode -->
 
@@ -909,7 +911,7 @@ document.getElementById('btnMute').addEventListener('click', () => {
 // Panel toggle
 const panel = document.getElementById('panel');
 document.getElementById('panelHandle').addEventListener('click', () => {
-  panel.classList.toggle('collapsed');
+  panel.classList.toggle('open');
 });
 
 // Prevent panel scroll from triggering canvas
