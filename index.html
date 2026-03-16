@@ -341,8 +341,12 @@ function initAC() {
 // ── OSCILLATOR ────────────────────────────────────────
 let oscActive = false, muted = false;
 
-function createOsc() {
+async function createOsc() {
   if (!ac) return;
+  // iOS Safari: AudioContext must be resumed inside user gesture
+  if (ac.state === 'suspended') {
+    await ac.resume();
+  }
   osc      = ac.createOscillator();
   oscGain  = ac.createGain();
   oscFilter= ac.createBiquadFilter();
@@ -557,16 +561,18 @@ function finishRecording() {
 let touching = false, touchX = 0, touchY = 0;
 let targetFreq = 440, currentFreq = 440;
 
-cv.addEventListener('touchstart', e => {
+cv.addEventListener('touchstart', async e => {
   e.preventDefault();
   initAC();
-  if (!oscActive) createOsc();
+  if (ac && ac.state === 'suspended') await ac.resume();
+  if (!oscActive) await createOsc();
   if (recording && !mediaRec) startRecording();
   touching = true;
   const t = e.touches[0];
   touchX = t.clientX / window.innerWidth;
   touchY = t.clientY / window.innerHeight;
-  updateSound(touchX, touchY);
+  // Wait for osc to be ready before updating sound
+  if (oscActive) updateSound(touchX, touchY);
   document.getElementById('noteDisplay').classList.add('active');
 }, { passive: false });
 
@@ -657,9 +663,15 @@ let trailPoints = [];
 function render() {
   requestAnimationFrame(render);
 
-  // Background
+  // Background — fully opaque to prevent flicker
   ctx.globalAlpha = 1;
-  ctx.fillStyle = 'rgba(5,5,15,.88)';
+  ctx.fillStyle = '#05050f';
+  ctx.fillRect(0, 0, W, H);
+  // Subtle vignette
+  const vig = ctx.createRadialGradient(W/2,H/2,H*.2,W/2,H/2,H*.8);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(0,0,8,.6)');
+  ctx.fillStyle = vig;
   ctx.fillRect(0, 0, W, H);
 
   // Chord pulse ring
@@ -684,22 +696,24 @@ function render() {
   }
 
   if (trailPoints.length > 1) {
+    ctx.save();
     for (let i = 1; i < trailPoints.length; i++) {
       const p0 = trailPoints[i-1], p1 = trailPoints[i];
       const age = (i / trailPoints.length);
-      const t   = Math.log(p1.freq / 65) / Math.log(2093 / 65);
+      const t   = Math.log(Math.max(p1.freq,65) / 65) / Math.log(2093 / 65);
       const hue = 200 + t * 140;
-      ctx.globalAlpha = age * .5;
+      ctx.globalAlpha = age * .45;
       ctx.strokeStyle = `hsl(${hue},80%,65%)`;
-      ctx.lineWidth   = age * 3 * devicePixelRatio;
-      ctx.shadowBlur  = 12;
+      ctx.lineWidth   = age * 2.5 * devicePixelRatio;
+      ctx.lineCap     = 'round';
+      ctx.shadowBlur  = 8 * devicePixelRatio;
       ctx.shadowColor = `hsl(${hue},80%,65%)`;
       ctx.beginPath();
       ctx.moveTo(p0.x, p0.y);
       ctx.lineTo(p1.x, p1.y);
       ctx.stroke();
     }
-    ctx.shadowBlur = 0;
+    ctx.restore();
   }
 
   // Particles
