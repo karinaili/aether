@@ -383,6 +383,7 @@ var loopDur=0,loopStart=0,hasLoop=false;
 var tracks=[],raf=null;
 var state='idle'; // idle|rec-first|playing|rec-layer
 var recBuf=[];
+var recActive=false; // separate flag so last audio chunks are not lost
 
 async function initAudio(){
   if(ctx){await ctx.resume();return true;}
@@ -398,9 +399,8 @@ async function initAudio(){
 
   spNode=ctx.createScriptProcessor(256,1,1);
   spNode.onaudioprocess=function(e){
-    if(state==='rec-first'||state==='rec-layer'){
+    if(recActive){
       var input=e.inputBuffer.getChannelData(0);
-      // Apply software boost to recorded samples
       var boosted=new Float32Array(input.length);
       for(var i=0;i<input.length;i++){
         boosted[i]=Math.max(-1,Math.min(1,input[i]*4.0));
@@ -417,18 +417,27 @@ async function initAudio(){
 async function onRec(){
   if(state!=='idle')return;
   if(!(await initAudio()))return;
-  recBuf=[];state='rec-first';
+  recBuf=[];recActive=true;state='rec-first';
   ui();setStatus('recording — press stop when done','rec');
 }
 async function onLayer(){
   if(state!=='playing')return;
   if(!(await initAudio()))return;
-  recBuf=[];state='rec-layer';
+  recBuf=[];recActive=true;state='rec-layer';
+  console.log('LAYER REC START at '+ctx.currentTime.toFixed(3));
   ui();setStatus('recording layer — press stop when done','rec');
 }
 function onStop(){
-  if(state==='rec-first')finishFirst();
-  else if(state==='rec-layer')finishLayer();
+  if(state!=='rec-first'&&state!=='rec-layer')return;
+  // Stop collecting audio FIRST
+  recActive=false;
+  console.log('STOP pressed, recBuf chunks so far: '+recBuf.length);
+  var wasFirst=(state==='rec-first');
+  // Wait 150ms for ScriptProcessor to flush last chunks into recBuf
+  setTimeout(function(){
+    if(wasFirst) finishFirst();
+    else finishLayer();
+  }, 150);
 }
 function finishFirst(){
   state='playing';
@@ -453,10 +462,11 @@ function finishLayer(){
   if(!raw){ui();return;}
 
   // Save full recording as-is — each track loops at its own length
+  console.log('LAYER RECORDED: '+raw.duration.toFixed(3)+'s, chunks: '+recBuf.length);
   var t=addTrack(raw);
   t.startedAt=ctx.currentTime; // start looping from RIGHT NOW
   scheduleTrack(t);
-  setStatus('playing · '+tracks.length+' layers · '+raw.duration.toFixed(2)+'s','play');
+  setStatus('layer: '+raw.duration.toFixed(2)+'s · total: '+tracks.length+' layers','play');
   ui();
 }
 
