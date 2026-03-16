@@ -278,6 +278,8 @@ body{
 }
 .trim-btn.apply{color:var(--amber);border-color:rgba(232,160,32,.5)}
 .trim-btn.apply:hover{background:var(--amber-glow);border-color:var(--amber)}
+.trim-btn.restore{color:var(--green-bright);border-color:rgba(60,216,112,.35)}
+.trim-btn.restore:hover{background:rgba(60,216,112,.08);border-color:var(--green-bright)}
 .trim-btn.cancel{color:var(--text-dim)}
 .trim-btn.cancel:hover{border-color:var(--border2);color:var(--text)}
 </style>
@@ -432,60 +434,27 @@ function finishFirst(){
   state='playing';
   var raw=buildBuf(recBuf);
   if(!raw||raw.length<1000){state='idle';ui();setStatus('too short — try again','');return;}
-  loopDur=raw.duration;loopStart=ctx.currentTime;hasLoop=true;
-  addTrack(raw);scheduleAll();startAnim();
-  ui();setStatus('playing  '+loopDur.toFixed(2)+'s loop','play');
+  // First track sets the master loopDur
+  loopDur=raw.duration;
+  loopStart=ctx.currentTime;
+  hasLoop=true;
+  addTrack(raw);
+  scheduleAll();
+  startAnim();
+  ui();setStatus('playing · 1 layer · '+loopDur.toFixed(2)+'s','play');
 }
+
 function finishLayer(){
   state='playing';
   if(!recBuf.length){ui();return;}
   var raw=buildBuf(recBuf);
   if(!raw){ui();return;}
 
-  var newDur = raw.duration;
-
-  if(newDur > loopDur + 0.1){
-    // ── NEW LAYER IS LONGER ──
-    // Tile existing tracks to fill new duration (loop them)
-    tracks.forEach(function(t){
-      stopSrcs(t);
-      var sr = t.buf.sampleRate;
-      var oldLen = t.buf.length;
-      var newLen = Math.round(newDur * sr);
-      var tiled  = ctx.createBuffer(1, newLen, sr);
-      var src    = t.buf.getChannelData(0);
-      var dst    = tiled.getChannelData(0);
-      // Tile: copy src repeatedly until newLen
-      for(var i=0; i<newLen; i++){
-        dst[i] = src[i % oldLen];
-      }
-      t.buf = tiled;
-      t.trimStart = 0; t.trimEnd = newDur;
-      var miniCv = document.querySelector('[data-id="'+t.id+'"] .twav canvas');
-      if(miniCv) drawWave(miniCv, t.buf, false);
-    });
-    loopDur   = newDur;
-    loopStart = ctx.currentTime;
-    // Add new layer as-is (it defines the new length)
-    addTrack(raw);
-    scheduleAll();
-    setStatus('loop extended to '+loopDur.toFixed(2)+'s · '+tracks.length+' layers','play');
-
-  } else {
-    // ── NEW LAYER FITS IN CURRENT LOOP ──
-    // Take from the START of the recording, trim to loopDur
-    var sr      = raw.sampleRate;
-    var n       = Math.round(loopDur * sr);
-    var fitted  = ctx.createBuffer(1, n, sr);
-    var src     = raw.getChannelData(0);
-    var dst     = fitted.getChannelData(0);
-    var copyLen = Math.min(src.length, n);
-    dst.set(src.subarray(0, copyLen));
-    // if shorter than loop — rest stays silent (already 0)
-    addTrack(fitted);
-    scheduleTrack(tracks[tracks.length-1]);
-    setStatus('playing · '+tracks.length+' layers','play');
-  }
+  // Save full recording as-is — no trimming, no padding
+  // Each track loops at its OWN duration independently
+  addTrack(raw);
+  scheduleTrack(tracks[tracks.length-1]);
+  setStatus('playing · '+tracks.length+' layers','play');
   ui();
 }
 
@@ -529,33 +498,46 @@ function padBuf(buf,dur){
 
 function addTrack(buf){
   var gain=ctx.createGain();gain.connect(ctx.destination);
-  var t={id:Date.now(),buf:buf,gain:gain,srcs:[],muted:false,num:tracks.length+1,trimStart:0,trimEnd:buf.duration};
+  var t={
+    id:Date.now(),buf:buf,originalBuf:buf, // keep original for trim undo
+    gain:gain,srcs:[],muted:false,
+    num:tracks.length+1,
+    trimStart:0,trimEnd:buf.duration
+  };
   tracks.push(t);renderTrack(t);return t;
 }
 function scheduleTrack(t){
   stopSrcs(t);if(t.muted)return;
   var now=ctx.currentTime;
-  var elapsed=(now-loopStart)%loopDur;
-  var offset=elapsed%t.buf.duration;
-  playLoop(t,now,offset);
+  var trimStart=t.trimStart||0;
+  var trimEnd  =t.trimEnd  ||t.buf.duration;
+  var playDur  =trimEnd-trimStart;
+  // Sync to time elapsed since loopStart, mod track's own play duration
+  var elapsed=(now-loopStart)%playDur;
+  playLoop(t,now,elapsed);
 }
 function scheduleAll(){tracks.forEach(scheduleTrack);}
 function playLoop(t,when,offset){
   var src=ctx.createBufferSource();src.buffer=t.buf;
   var fg=ctx.createGain();src.connect(fg);fg.connect(t.gain);
-  var rem=t.buf.duration-offset,fade=Math.min(0.004,rem*.05);
-  var peakVol=1.8; // boost playback volume
+  // Use trimStart/trimEnd if set, otherwise full buffer
+  var trimStart = t.trimStart || 0;
+  var trimEnd   = t.trimEnd   || t.buf.duration;
+  var playDur   = trimEnd - trimStart;
+  var startOff  = trimStart + (offset % playDur);
+  var rem       = trimEnd - startOff;
+  if(rem < 0.01) rem = playDur; // safety
+  var fade = Math.min(0.004, rem * .05);
+  var vol  = 1.8;
   fg.gain.setValueAtTime(0,when);
-  fg.gain.linearRampToValueAtTime(peakVol,when+fade);
-  fg.gain.setValueAtTime(peakVol,when+rem-fade);
+  fg.gain.linearRampToValueAtTime(vol,when+fade);
+  fg.gain.setValueAtTime(vol,when+rem-fade);
   fg.gain.linearRampToValueAtTime(0,when+rem);
-  src.start(when,offset);
+  src.start(when, startOff);
   src.onended=function(){
     if(!tracks.find(function(x){return x.id===t.id;})||t.muted)return;
-    var nextWhen=when+rem;
-    var cyclePos=(nextWhen-loopStart)%loopDur;
-    if(cyclePos>0.01)nextWhen=nextWhen+(loopDur-cyclePos);
-    playLoop(t,nextWhen,0);
+    // Loop back to trimStart
+    playLoop(t, when+rem, 0);
   };
   t.srcs.push(src);
 }
@@ -614,6 +596,7 @@ function renderTrack(t){
     '<div class="trim-times" id="ttimes-'+t.id+'"></div>'+
     '<div class="trim-btns">'+
     '<button class="trim-btn cancel" id="tcancel-'+t.id+'">cancel</button>'+
+    '<button class="trim-btn restore" id="trestore-'+t.id+'">restore</button>'+
     '<button class="trim-btn apply" id="tapply-'+t.id+'">apply</button>'+
     '</div></div></div>';
 
@@ -695,8 +678,22 @@ function initTrimEditor(t){
   document.addEventListener('touchend',endDrag);
   document.getElementById('tapply-'+t.id).onclick=function(){applyTrim(t);};
   document.getElementById('tcancel-'+t.id).onclick=function(){
-    t.trimStart=0;t.trimEnd=t.buf.duration;
-    updateHandles(t);toggleTrim(t);
+    // Cancel: revert handles to current trim without applying
+    updateHandles(t);
+    toggleTrim(t);
+  };
+  document.getElementById('trestore-'+t.id).onclick=function(){
+    // Restore: go back to original full recording
+    stopSrcs(t);
+    t.buf       = t.originalBuf;
+    t.trimStart = 0;
+    t.trimEnd   = t.originalBuf.duration;
+    var miniCv=document.querySelector('[data-id="'+t.id+'"] .twav canvas');
+    if(miniCv) drawWave(miniCv,t.buf,false);
+    updateHandles(t);
+    scheduleTrack(t);
+    setStatus('track '+t.num+' restored','play');
+    toggleTrim(t);
   };
 }
 function updateHandles(t){
@@ -712,14 +709,12 @@ function updateHandles(t){
   if(ti)ti.textContent=t.trimStart.toFixed(2)+'s → '+t.trimEnd.toFixed(2)+'s  ('+((t.trimEnd-t.trimStart).toFixed(2))+'s)';
 }
 function applyTrim(t){
-  var newBuf=trimBuf(t.buf,t.trimStart,t.trimEnd);
-  var isFirst=tracks.indexOf(t)===0;
-  if(isFirst){loopDur=newBuf.duration;loopStart=ctx.currentTime;}
-  else{
-    if(newBuf.duration>loopDur)newBuf=trimBuf(newBuf,0,loopDur);
-    else if(newBuf.duration<loopDur)newBuf=padBuf(newBuf,loopDur);
-  }
-  stopSrcs(t);t.buf=newBuf;t.trimStart=0;t.trimEnd=newBuf.duration;
+  // Trim from originalBuf so multiple trims don't stack
+  var newBuf=trimBuf(t.originalBuf,t.trimStart,t.trimEnd);
+  stopSrcs(t);
+  t.buf=newBuf;
+  // Keep originalBuf intact for future restores
+  t.trimStart=0;t.trimEnd=newBuf.duration;
   var miniCv=document.querySelector('[data-id="'+t.id+'"] .twav canvas');
   if(miniCv)drawWave(miniCv,newBuf,false);
   var ed=document.getElementById('trim-'+t.id);if(ed)ed.classList.remove('open');
