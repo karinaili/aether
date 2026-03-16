@@ -27,6 +27,7 @@
 
 html, body {
 width: 100%; height: 100%;
+padding-bottom: env(safe-area-inset-bottom, 0px);
 background: var(–bg);
 overflow: hidden;
 touch-action: none;
@@ -41,6 +42,8 @@ width: 100%; height: 100%;
 touch-action: none;
 background: #05050f;
 display: block;
+transform: translateZ(0);
+-webkit-transform: translateZ(0);
 }
 
 /* ── OVERLAY GRID LINES ── */
@@ -55,6 +58,8 @@ background-size: 40px 40px;
 /* ── TOP BAR ── */
 .topbar {
 position: fixed; top: 0; left: 0; right: 0;
+transform: translateZ(0);
+-webkit-transform: translateZ(0);
 height: 48px;
 display: flex; align-items: center; justify-content: space-between;
 padding: 0 16px;
@@ -93,15 +98,17 @@ color: rgba(192,192,255,.7);
 position: fixed; bottom: 0; left: 0; right: 0;
 background: var(–panel-bg);
 border-top: 1px solid var(–panel-border);
+transform: translateZ(0);
+-webkit-transform: translateZ(0);
+will-change: transform;
 z-index: 30;
-padding: 10px 14px env(safe-area-inset-bottom, 20px);
-padding-bottom: max(20px, env(safe-area-inset-bottom));
+padding: 10px 14px 16px;
 display: flex; flex-direction: column; gap: 10px;
 transition: transform .3s cubic-bezier(.4,0,.2,1);
 max-height: 75vh;
 overflow-y: auto;
 }
-.panel.collapsed { transform: translateY(calc(100% - 44px)); }
+.panel.collapsed { transform: translateZ(0) translateY(calc(100% - 44px)); }
 
 .panel-handle {
 width: 36px; height: 3px; border-radius: 2px;
@@ -422,109 +429,93 @@ function freqToNote(f) {
   return NOTE_NAMES[((midi % 12) + 12) % 12] + Math.floor(midi / 12 - 1);
 }
 
-// ── BACKING CHORDS ────────────────────────────────────
-// Each chord: array of MIDI notes, duration in beats
+// ── BACKING CHORDS ────────────────────────────────────────
 const BACKING_PROGRESSIONS = {
   jazzMaj7: [
-    { notes:[60,64,67,71],   beats:4 }, // Cmaj7
-    { notes:[65,69,72,76],   beats:4 }, // Fmaj7
-    { notes:[62,65,69,72],   beats:4 }, // Dm7
-    { notes:[67,71,74,77],   beats:4 }, // G7
+    { notes:[60,64,67,71],    beats:4 },
+    { notes:[65,69,72,76],    beats:4 },
+    { notes:[62,65,69,72],    beats:4 },
+    { notes:[67,71,74,77],    beats:4 },
   ],
   neoSoul: [
-    { notes:[60,63,67,70,74], beats:4 }, // Cm9
-    { notes:[58,62,65,69,72], beats:4 }, // Bbmaj9
-    { notes:[63,67,70,74,77], beats:4 }, // Ebmaj9
-    { notes:[56,60,63,67,70], beats:4 }, // Ab9
+    { notes:[60,63,67,70,74], beats:4 },
+    { notes:[58,62,65,69,72], beats:4 },
+    { notes:[63,67,70,74,77], beats:4 },
+    { notes:[56,60,63,67,70], beats:4 },
   ],
   modal: [
-    { notes:[62,65,69,72,76], beats:8 }, // Dm9
-    { notes:[65,69,72,76,79], beats:8 }, // Fmaj9
+    { notes:[62,65,69,72,76], beats:8 },
+    { notes:[65,69,72,76,79], beats:8 },
   ],
   tension: [
-    { notes:[60,63,66,70],   beats:4 }, // Cdim7
-    { notes:[58,62,65,68],   beats:4 }, // Bbm7b5
-    { notes:[56,60,63,67],   beats:4 }, // Ab7
-    { notes:[55,59,62,65],   beats:4 }, // Gm7
+    { notes:[60,63,66,70],    beats:4 },
+    { notes:[58,62,65,68],    beats:4 },
+    { notes:[56,60,63,67],    beats:4 },
+    { notes:[55,59,62,65],    beats:4 },
   ],
   bossa: [
-    { notes:[60,64,67,70,74], beats:4 }, // Cmaj9
-    { notes:[59,62,66,69],    beats:2 }, // B7
-    { notes:[57,60,64,67,71], beats:2 }, // Am9
-    { notes:[53,57,60,64,67], beats:4 }, // Fmaj9
+    { notes:[60,64,67,70,74], beats:4 },
+    { notes:[59,62,66,69],    beats:2 },
+    { notes:[57,60,64,67,71], beats:2 },
+    { notes:[53,57,60,64,67], beats:4 },
   ],
 };
 
-let backingActive = false, backingOscs = [], backingIdx = 0;
-let backingScheduled = false, nextChordTime = 0;
+let backingActive = false;
+let backingIdx    = 0;
+let nextChordTime = 0;
+let backingTimerId= null;
 let BPM = 72;
 function beatLen() { return 60 / BPM; }
 
-function scheduleChord() {
-  if (!backingActive || !ac) return;
-  const prog = BACKING_PROGRESSIONS[currentBacking];
-  if (!prog) return;
-
-  const chord    = prog[backingIdx % prog.length];
-  const duration = chord.beats * beatLen();
-
-  // Kill old
-  backingOscs.forEach(o => { try { o.osc.stop(nextChordTime + duration + .05); } catch(e){} });
-  backingOscs = [];
-
-  // Create new chord voices
+function playChord(chord, when, dur) {
   chord.notes.forEach((midi, i) => {
-    const o  = ac.createOscillator();
-    const g  = ac.createGain();
-    const f  = ac.createBiquadFilter();
-
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    const f = ac.createBiquadFilter();
     o.type = 'sine';
     o.frequency.value = midiToFreq(midi);
-
-    // Slight detuning on upper voices for warmth
-    if (i > 0) o.detune.value = (Math.random() - .5) * 6;
-
-    f.type = 'lowpass'; f.frequency.value = 900; f.Q.value = .8;
-
-    const vol = 0.06 / chord.notes.length;
-    g.gain.setValueAtTime(0, nextChordTime);
-    g.gain.linearRampToValueAtTime(vol, nextChordTime + .15);
-    g.gain.setValueAtTime(vol, nextChordTime + duration - .2);
-    g.gain.linearRampToValueAtTime(0, nextChordTime + duration + .05);
-
+    if (i > 0) o.detune.value = (Math.random() - .5) * 8;
+    f.type = 'lowpass'; f.frequency.value = 1100; f.Q.value = 0.7;
+    const vol = 0.08 / chord.notes.length;
+    g.gain.setValueAtTime(0, when);
+    g.gain.linearRampToValueAtTime(vol, when + 0.12);
+    g.gain.setValueAtTime(vol, when + dur - 0.25);
+    g.gain.linearRampToValueAtTime(0, when + dur);
     o.connect(f); f.connect(g); g.connect(filterNode);
-    o.start(nextChordTime);
-    backingOscs.push({ osc: o, gain: g });
+    o.start(when);
+    o.stop(when + dur + 0.05);
   });
-
-  nextChordTime += duration;
-  backingIdx++;
-
-  // Pulsing background animation cue
   chordPulse = 1.0;
+}
 
-  // Schedule next chord — look-ahead scheduling
-  const lookAhead = 0.15;
-  const delay = Math.max(50, (duration - lookAhead) * 1000);
-  setTimeout(() => { if (backingActive) scheduleChord(); }, delay);
+function tickBacking() {
+  if (!backingActive || !ac) return;
+  const prog = BACKING_PROGRESSIONS[currentBacking];
+  if (!prog || !prog.length) return;
+  const now = ac.currentTime;
+  const AHEAD = 1.5;
+  while (nextChordTime < now + AHEAD) {
+    const chord = prog[backingIdx % prog.length];
+    const dur   = chord.beats * beatLen();
+    if (nextChordTime >= now - 0.05) playChord(chord, nextChordTime, dur);
+    nextChordTime += dur;
+    backingIdx++;
+  }
+  backingTimerId = setTimeout(tickBacking, 250);
 }
 
 function startBacking() {
   if (!ac) return;
   backingActive = true;
   backingIdx    = 0;
-  nextChordTime = ac.currentTime + 0.05;
-  scheduleChord();
+  nextChordTime = ac.currentTime + 0.1;
+  tickBacking();
 }
 
 function stopBacking() {
   backingActive = false;
-  backingOscs.forEach(o => {
-    try { o.gain.gain.setValueAtTime(o.gain.gain.value, ac.currentTime);
-          o.gain.gain.linearRampToValueAtTime(0, ac.currentTime + .3);
-          o.osc.stop(ac.currentTime + .35); } catch(e) {}
-  });
-  backingOscs = [];
+  if (backingTimerId) { clearTimeout(backingTimerId); backingTimerId = null; }
 }
 
 // ── RECORDING ─────────────────────────────────────────
