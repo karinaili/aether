@@ -439,26 +439,49 @@ function finishFirst(){
 function finishLayer(){
   state='playing';
   if(!recBuf.length){ui();return;}
-  var raw=buildBuf(recBuf); if(!raw){ui();return;}
+  var raw=buildBuf(recBuf);
+  if(!raw){ui();return;}
 
-  if(raw.duration > loopDur + 0.1){
-    // New layer is LONGER — extend loop for everyone
-    var newDur=raw.duration;
+  var newDur = raw.duration;
+
+  if(newDur > loopDur + 0.1){
+    // ── NEW LAYER IS LONGER ──
+    // Tile existing tracks to fill new duration (loop them)
     tracks.forEach(function(t){
       stopSrcs(t);
-      t.buf=padBuf(t.buf,newDur);
-      var miniCv=document.querySelector('[data-id="'+t.id+'"] .twav canvas');
-      if(miniCv) drawWave(miniCv,t.buf,false);
+      var sr = t.buf.sampleRate;
+      var oldLen = t.buf.length;
+      var newLen = Math.round(newDur * sr);
+      var tiled  = ctx.createBuffer(1, newLen, sr);
+      var src    = t.buf.getChannelData(0);
+      var dst    = tiled.getChannelData(0);
+      // Tile: copy src repeatedly until newLen
+      for(var i=0; i<newLen; i++){
+        dst[i] = src[i % oldLen];
+      }
+      t.buf = tiled;
+      t.trimStart = 0; t.trimEnd = newDur;
+      var miniCv = document.querySelector('[data-id="'+t.id+'"] .twav canvas');
+      if(miniCv) drawWave(miniCv, t.buf, false);
     });
-    loopDur=newDur;
-    loopStart=ctx.currentTime;
+    loopDur   = newDur;
+    loopStart = ctx.currentTime;
+    // Add new layer as-is (it defines the new length)
     addTrack(raw);
     scheduleAll();
     setStatus('loop extended to '+loopDur.toFixed(2)+'s · '+tracks.length+' layers','play');
+
   } else {
-    // New layer fits — trim/pad to loopDur
-    var fitted=trimBuf(raw,0,Math.min(raw.duration,loopDur));
-    if(fitted.duration<loopDur) fitted=padBuf(fitted,loopDur);
+    // ── NEW LAYER FITS IN CURRENT LOOP ──
+    // Take from the START of the recording, trim to loopDur
+    var sr      = raw.sampleRate;
+    var n       = Math.round(loopDur * sr);
+    var fitted  = ctx.createBuffer(1, n, sr);
+    var src     = raw.getChannelData(0);
+    var dst     = fitted.getChannelData(0);
+    var copyLen = Math.min(src.length, n);
+    dst.set(src.subarray(0, copyLen));
+    // if shorter than loop — rest stays silent (already 0)
     addTrack(fitted);
     scheduleTrack(tracks[tracks.length-1]);
     setStatus('playing · '+tracks.length+' layers','play');
