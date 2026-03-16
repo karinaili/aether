@@ -397,7 +397,7 @@ async function initAudio(){
   var micBoost=ctx.createGain();
   micBoost.gain.value=4.0; // boost mic signal before recording
 
-  spNode=ctx.createScriptProcessor(256,1,1);
+  spNode=ctx.createScriptProcessor(4096,1,1);
   spNode.onaudioprocess=function(e){
     if(recActive){
       var input=e.inputBuffer.getChannelData(0);
@@ -424,21 +424,23 @@ async function onLayer(){
   if(state!=='playing')return;
   if(!(await initAudio()))return;
   recBuf=[];recActive=true;state='rec-layer';
-  console.log('LAYER REC START at '+ctx.currentTime.toFixed(3));
   ui();setStatus('recording layer — press stop when done','rec');
 }
 function onStop(){
   if(state!=='rec-first'&&state!=='rec-layer')return;
-  // Stop collecting audio FIRST
-  recActive=false;
-  console.log('STOP pressed, recBuf chunks so far: '+recBuf.length);
   var wasFirst=(state==='rec-first');
-  // Wait 150ms for ScriptProcessor to flush last chunks into recBuf
+  state='playing';
+  ui();
+  // Keep recActive=true for 200ms to capture last ScriptProcessor chunks
   setTimeout(function(){
-    if(wasFirst) finishFirst();
-    else finishLayer();
-  }, 150);
+    recActive=false;
+    setTimeout(function(){
+      if(wasFirst) finishFirst();
+      else finishLayer();
+    }, 100);
+  }, 200);
 }
+
 function finishFirst(){
   state='playing';
   var raw=buildBuf(recBuf);
@@ -461,12 +463,12 @@ function finishLayer(){
   var raw=buildBuf(recBuf);
   if(!raw){ui();return;}
 
-  // Save full recording as-is — each track loops at its own length
-  console.log('LAYER RECORDED: '+raw.duration.toFixed(3)+'s, chunks: '+recBuf.length);
+  // Show actual recorded duration in status
+  var dur=raw.duration.toFixed(2);
   var t=addTrack(raw);
-  t.startedAt=ctx.currentTime; // start looping from RIGHT NOW
+  t.startedAt=null;
   scheduleTrack(t);
-  setStatus('layer: '+raw.duration.toFixed(2)+'s · total: '+tracks.length+' layers','play');
+  setStatus('layer '+tracks.length+': '+dur+'s recorded','play');
   ui();
 }
 
@@ -522,26 +524,33 @@ function addTrack(buf){
 function scheduleTrack(t){
   stopSrcs(t);if(t.muted)return;
   var now=ctx.currentTime;
-  // Each track remembers when it started — loops from that anchor
-  if(!t.startedAt) t.startedAt=now;
+  // New track always starts from beginning
+  // Existing tracks sync to their position in cycle
   var trimStart=t.trimStart||0;
   var trimEnd  =(t.trimEnd!=null)?t.trimEnd:t.buf.duration;
   var playDur  =trimEnd-trimStart;
-  var elapsed  =(now-t.startedAt)%playDur;
-  playLoop(t,now,elapsed);
+  if(!t.startedAt){
+    // First time scheduling — start from 0
+    t.startedAt=now;
+    playLoop(t,now,trimStart);
+  } else {
+    // Re-scheduling (after mute/unmute) — resume at correct position
+    var elapsed=(now-t.startedAt)%playDur;
+    playLoop(t,now,trimStart+elapsed);
+  }
 }
 function scheduleAll(){tracks.forEach(scheduleTrack);}
-function playLoop(t,when,offset){
-  var src=ctx.createBufferSource();src.buffer=t.buf;
-  var fg=ctx.createGain();src.connect(fg);fg.connect(t.gain);
+function playLoop(t,when,startAt){
+  // startAt = absolute position in buffer to start playing from
   var trimStart = t.trimStart||0;
   var trimEnd   = (t.trimEnd!=null)?t.trimEnd:t.buf.duration;
-  var playDur   = Math.max(0.01, trimEnd-trimStart);
-  // offset is position within [0, playDur]
-  var safeOffset= offset%playDur;
-  var startAt   = trimStart+safeOffset;
-  var rem       = trimEnd-startAt;
-  if(rem<0.01){startAt=trimStart;rem=playDur;}
+  if(startAt<trimStart) startAt=trimStart;
+  if(startAt>=trimEnd)  startAt=trimStart;
+  var rem = trimEnd - startAt;
+  if(rem<0.005) rem=trimEnd-trimStart;
+
+  var src=ctx.createBufferSource(); src.buffer=t.buf;
+  var fg=ctx.createGain(); src.connect(fg); fg.connect(t.gain);
   var fade=Math.min(0.004,rem*.05);
   var vol=1.8;
   fg.gain.setValueAtTime(0,when);
@@ -551,7 +560,8 @@ function playLoop(t,when,offset){
   src.start(when,startAt);
   src.onended=function(){
     if(!tracks.find(function(x){return x.id===t.id;})||t.muted)return;
-    playLoop(t,when+rem,0);
+    // Next iteration always starts from trimStart
+    playLoop(t,when+rem,trimStart);
   };
   t.srcs.push(src);
 }
