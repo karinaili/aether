@@ -390,10 +390,21 @@ async function initAudio(){
     var stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
     micSrc=ctx.createMediaStreamSource(stream);
   }catch(e){setStatus('mic denied — open over https and allow mic','');return false;}
+  // Input boost: normalize mic input which is often very quiet on iOS
+  var micBoost=ctx.createGain();
+  micBoost.gain.value=4.0; // boost mic signal before recording
+
   spNode=ctx.createScriptProcessor(256,1,1);
   spNode.onaudioprocess=function(e){
-    if(state==='rec-first'||state==='rec-layer')
-      recBuf.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    if(state==='rec-first'||state==='rec-layer'){
+      var input=e.inputBuffer.getChannelData(0);
+      // Apply software boost to recorded samples
+      var boosted=new Float32Array(input.length);
+      for(var i=0;i<input.length;i++){
+        boosted[i]=Math.max(-1,Math.min(1,input[i]*4.0));
+      }
+      recBuf.push(boosted);
+    }
   };
   var sil=ctx.createGain();sil.gain.value=0;
   micSrc.connect(spNode);spNode.connect(sil);sil.connect(ctx.destination);
@@ -510,9 +521,10 @@ function playLoop(t,when,offset){
   var src=ctx.createBufferSource();src.buffer=t.buf;
   var fg=ctx.createGain();src.connect(fg);fg.connect(t.gain);
   var rem=t.buf.duration-offset,fade=Math.min(0.004,rem*.05);
+  var peakVol=1.8; // boost playback volume
   fg.gain.setValueAtTime(0,when);
-  fg.gain.linearRampToValueAtTime(1,when+fade);
-  fg.gain.setValueAtTime(1,when+rem-fade);
+  fg.gain.linearRampToValueAtTime(peakVol,when+fade);
+  fg.gain.setValueAtTime(peakVol,when+rem-fade);
   fg.gain.linearRampToValueAtTime(0,when+rem);
   src.start(when,offset);
   src.onended=function(){
