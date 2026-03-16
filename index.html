@@ -19,7 +19,7 @@
   --glow3: #ff4080;
   --amber: #ffb020;
   --green: #20ffb0;
-  --panel-bg: rgba(8,8,28,.92);
+  --panel-bg: #08081c;
   --panel-border: rgba(80,80,160,.3);
 }
 
@@ -39,6 +39,8 @@ font-family: ‘Courier New’, Courier, monospace;
 position: fixed; inset: 0;
 width: 100%; height: 100%;
 touch-action: none;
+background: #05050f;
+display: block;
 }
 
 /* ── OVERLAY GRID LINES ── */
@@ -91,12 +93,13 @@ color: rgba(192,192,255,.7);
 position: fixed; bottom: 0; left: 0; right: 0;
 background: var(–panel-bg);
 border-top: 1px solid var(–panel-border);
-backdrop-filter: blur(20px);
--webkit-backdrop-filter: blur(20px);
 z-index: 30;
-padding: 10px 14px 20px;
+padding: 10px 14px env(safe-area-inset-bottom, 20px);
+padding-bottom: max(20px, env(safe-area-inset-bottom));
 display: flex; flex-direction: column; gap: 10px;
 transition: transform .3s cubic-bezier(.4,0,.2,1);
+max-height: 75vh;
+overflow-y: auto;
 }
 .panel.collapsed { transform: translateY(calc(100% - 44px)); }
 
@@ -214,8 +217,6 @@ line-height: 1;
 <body>
 
 <canvas id="cv"></canvas>
-
-<div class="grid-overlay"></div>
 
 <div class="topbar">
   <div class="logo">ÆTHER</div>
@@ -502,9 +503,10 @@ function scheduleChord() {
   // Pulsing background animation cue
   chordPulse = 1.0;
 
-  // Schedule next chord
-  const scheduleAhead = 0.2;
-  setTimeout(scheduleChord, (duration - scheduleAhead) * 1000);
+  // Schedule next chord — look-ahead scheduling
+  const lookAhead = 0.15;
+  const delay = Math.max(50, (duration - lookAhead) * 1000);
+  setTimeout(() => { if (backingActive) scheduleChord(); }, delay);
 }
 
 function startBacking() {
@@ -667,12 +669,18 @@ function render() {
   ctx.globalAlpha = 1;
   ctx.fillStyle = '#05050f';
   ctx.fillRect(0, 0, W, H);
-  // Subtle vignette
-  const vig = ctx.createRadialGradient(W/2,H/2,H*.2,W/2,H/2,H*.8);
-  vig.addColorStop(0, 'rgba(0,0,0,0)');
-  vig.addColorStop(1, 'rgba(0,0,8,.6)');
-  ctx.fillStyle = vig;
-  ctx.fillRect(0, 0, W, H);
+
+  // Grid lines drawn on canvas (no DOM overlay needed)
+  ctx.strokeStyle = 'rgba(40,40,100,.06)';
+  ctx.lineWidth = 1;
+  const gs = 40 * devicePixelRatio;
+  for (let x = 0; x < W; x += gs) {
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+  }
+  for (let y = 0; y < H; y += gs) {
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+  }
+
 
   // Chord pulse ring
   if (chordPulse > 0) {
@@ -851,13 +859,12 @@ document.getElementById('btnBacking').addEventListener('click', () => {
     btn.textContent = 'off';
     btn.classList.remove('green-on');
   } else {
-    if (currentBacking === 'none') {
-      // Auto-pick first
+    if (!currentBacking || currentBacking === 'none') {
       document.getElementById('backingSelect').value = 'jazzMaj7';
       currentBacking = 'jazzMaj7';
     }
     startBacking();
-    btn.textContent = 'on';
+    btn.textContent = 'on ▶';
     btn.classList.add('green-on');
   }
 });
