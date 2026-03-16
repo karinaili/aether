@@ -63,7 +63,7 @@ transform: translateZ(0);
 height: 48px;
 display: flex; align-items: center; justify-content: space-between;
 padding: 0 16px;
-background: linear-gradient(180deg, rgba(5,5,20,.9) 0%, transparent 100%);
+display: none;
 z-index: 20; pointer-events: none;
 }
 .logo {
@@ -81,7 +81,8 @@ min-width: 80px; text-align: right;
 
 /* ── NOTE DISPLAY ── */
 .note-display {
-position: fixed; top: 60px; left: 0; right: 0;
+position: fixed; top: 50%; left: 0; right: 0;
+transform: translateY(-50%);
 text-align: center; pointer-events: none; z-index: 20;
 font-size: 48px; letter-spacing: .1em;
 color: rgba(192,192,255,.0);
@@ -95,26 +96,35 @@ color: rgba(192,192,255,.7);
 
 /* ── BOTTOM PANEL ── */
 .panel {
-position: fixed; bottom: 0; left: 0; right: 0;
+position: fixed; top: 0; left: 0; right: 0;
 background: var(–panel-bg);
-border-top: 1px solid var(–panel-border);
+border-bottom: 1px solid var(–panel-border);
 transform: translateZ(0);
 -webkit-transform: translateZ(0);
 will-change: transform;
 z-index: 30;
-padding: 10px 14px 16px;
-display: flex; flex-direction: column; gap: 10px;
+padding: 10px 14px 12px;
+display: flex; flex-direction: column; gap: 8px;
 transition: transform .3s cubic-bezier(.4,0,.2,1);
-max-height: 75vh;
-overflow-y: auto;
 }
-.panel.collapsed { transform: translateZ(0) translateY(calc(100% - 44px)); }
+.panel.collapsed { transform: translateZ(0) translateY(calc(-100% + 36px)); }
 
 .panel-handle {
 width: 36px; height: 3px; border-radius: 2px;
 background: var(–panel-border);
-margin: 0 auto 6px;
+margin: 4px auto 2px;
 cursor: pointer;
+}
+/* Panel header row with logo + freq */
+.panel-header {
+display: flex; align-items: center; justify-content: space-between;
+padding: 0 2px;
+cursor: pointer;
+}
+.panel-logo {
+font-size: 13px; letter-spacing: .35em;
+color: var(–text-bright);
+text-shadow: 0 0 12px var(–glow);
 }
 
 /* Panel rows */
@@ -225,11 +235,6 @@ line-height: 1;
 
 <canvas id="cv"></canvas>
 
-<div class="topbar">
-  <div class="logo">ÆTHER</div>
-  <div class="freq-display" id="freqDisplay">-- Hz</div>
-</div>
-
 <div class="note-display" id="noteDisplay">C4</div>
 
 <!-- Scale strip on right -->
@@ -239,7 +244,11 @@ line-height: 1;
 <!-- Bottom panel -->
 
 <div class="panel collapsed" id="panel">
-  <div class="panel-handle" id="panelHandle"></div>
+  <div class="panel-header" id="panelHandle">
+    <div class="panel-logo">ÆTHER</div>
+    <div class="freq-display" id="freqDisplay">-- Hz</div>
+  </div>
+  <div class="panel-handle"></div>
 
   <!-- Wave + Mode -->
 
