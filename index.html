@@ -438,7 +438,9 @@ function finishFirst(){
   loopDur=raw.duration;
   loopStart=ctx.currentTime;
   hasLoop=true;
-  addTrack(raw);
+  var t=addTrack(raw);
+  t.startedAt=ctx.currentTime;
+  loopStart=ctx.currentTime;
   scheduleAll();
   startAnim();
   ui();setStatus('playing · 1 layer · '+loopDur.toFixed(2)+'s','play');
@@ -450,11 +452,11 @@ function finishLayer(){
   var raw=buildBuf(recBuf);
   if(!raw){ui();return;}
 
-  // Save full recording as-is — no trimming, no padding
-  // Each track loops at its OWN duration independently
-  addTrack(raw);
-  scheduleTrack(tracks[tracks.length-1]);
-  setStatus('playing · '+tracks.length+' layers','play');
+  // Save full recording as-is — each track loops at its own length
+  var t=addTrack(raw);
+  t.startedAt=ctx.currentTime; // start looping from RIGHT NOW
+  scheduleTrack(t);
+  setStatus('playing · '+tracks.length+' layers · '+raw.duration.toFixed(2)+'s','play');
   ui();
 }
 
@@ -499,45 +501,47 @@ function padBuf(buf,dur){
 function addTrack(buf){
   var gain=ctx.createGain();gain.connect(ctx.destination);
   var t={
-    id:Date.now(),buf:buf,originalBuf:buf, // keep original for trim undo
+    id:Date.now(),buf:buf,originalBuf:buf,
     gain:gain,srcs:[],muted:false,
     num:tracks.length+1,
-    trimStart:0,trimEnd:buf.duration
+    trimStart:0,trimEnd:buf.duration,
+    startedAt:ctx?ctx.currentTime:0  // anchor for independent looping
   };
   tracks.push(t);renderTrack(t);return t;
 }
 function scheduleTrack(t){
   stopSrcs(t);if(t.muted)return;
   var now=ctx.currentTime;
+  // Each track remembers when it started — loops from that anchor
+  if(!t.startedAt) t.startedAt=now;
   var trimStart=t.trimStart||0;
-  var trimEnd  =t.trimEnd  ||t.buf.duration;
+  var trimEnd  =(t.trimEnd!=null)?t.trimEnd:t.buf.duration;
   var playDur  =trimEnd-trimStart;
-  // Sync to time elapsed since loopStart, mod track's own play duration
-  var elapsed=(now-loopStart)%playDur;
+  var elapsed  =(now-t.startedAt)%playDur;
   playLoop(t,now,elapsed);
 }
 function scheduleAll(){tracks.forEach(scheduleTrack);}
 function playLoop(t,when,offset){
   var src=ctx.createBufferSource();src.buffer=t.buf;
   var fg=ctx.createGain();src.connect(fg);fg.connect(t.gain);
-  // Use trimStart/trimEnd if set, otherwise full buffer
-  var trimStart = t.trimStart || 0;
-  var trimEnd   = t.trimEnd   || t.buf.duration;
-  var playDur   = trimEnd - trimStart;
-  var startOff  = trimStart + (offset % playDur);
-  var rem       = trimEnd - startOff;
-  if(rem < 0.01) rem = playDur; // safety
-  var fade = Math.min(0.004, rem * .05);
-  var vol  = 1.8;
+  var trimStart = t.trimStart||0;
+  var trimEnd   = (t.trimEnd!=null)?t.trimEnd:t.buf.duration;
+  var playDur   = Math.max(0.01, trimEnd-trimStart);
+  // offset is position within [0, playDur]
+  var safeOffset= offset%playDur;
+  var startAt   = trimStart+safeOffset;
+  var rem       = trimEnd-startAt;
+  if(rem<0.01){startAt=trimStart;rem=playDur;}
+  var fade=Math.min(0.004,rem*.05);
+  var vol=1.8;
   fg.gain.setValueAtTime(0,when);
   fg.gain.linearRampToValueAtTime(vol,when+fade);
   fg.gain.setValueAtTime(vol,when+rem-fade);
   fg.gain.linearRampToValueAtTime(0,when+rem);
-  src.start(when, startOff);
+  src.start(when,startAt);
   src.onended=function(){
     if(!tracks.find(function(x){return x.id===t.id;})||t.muted)return;
-    // Loop back to trimStart
-    playLoop(t, when+rem, 0);
+    playLoop(t,when+rem,0);
   };
   t.srcs.push(src);
 }
